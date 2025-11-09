@@ -42,48 +42,35 @@ const pool = new Pool({
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
-  port: process.env.SMTP_PORT,
-  secure: process.env.SMTP_SECURE === 'true',
+  port: Number(process.env.SMTP_PORT) || 587,
+  secure: process.env.SMTP_SECURE === 'true', // false for 587
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
   }
 });
 
-export async function sendMail(to, subject, html) {
+export async function sendMail({ to, subject, html, text }) {
   return transporter.sendMail({
     from: {
-      name: process.env.MAIL_FROM_NAME,
-      address: process.env.MAIL_FROM
+      name: process.env.MAIL_FROM_NAME || 'Spatial Force',
+      address: process.env.MAIL_FROM || process.env.EMAIL_USER
     },
     to,
-    replyTo: process.env.MAIL_REPLY_TO,  // 👈 replies go here
+    replyTo: process.env.MAIL_REPLY_TO || process.env.MAIL_FROM || process.env.EMAIL_USER,
     subject,
-    html
+    text,
+    html,
+    headers: { 'X-Entity-Ref-ID': crypto.randomBytes(16).toString('hex') }
   });
 }
 
-// Verify connection
+// single verify only (optional)
 transporter.verify()
-  .then(() => console.log('NEW TRANSPORTER READY'))
-  .catch(err => console.error('FRESH TRANSPORTER ERROR:', err));
+  .then(() => console.log('✅ Mailer ready'))
+  .catch(err => console.error('❌ Mailer error:', err.message));
 
 
-transporter.verify(function(error, success) {
-  if (error) {
-    console.log('Email connection error:', error);
-  } else {
-    console.log('Server is ready to send emails');
-  }
-});
-
-transporter.verify(function(error, success) {
-  if (error) {
-    console.log('Email connection error:', error);
-  } else {
-    console.log('Server is ready to send emails');
-  }
-});
 
 
 const app = express();
@@ -98,7 +85,7 @@ app.use(
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'", "'unsafe-inline'", "https://accounts.google.com"],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-        connectSrc: ["'self'", "https://spatialforce.co.zw","https://www.spatialforce.co.zw"],
+        connectSrc: ["'self'", "https://spatialforce.co.zw", "https://www.spatialforce.co.zw", "https://spatialforce-backend.vercel.app"],
         imgSrc: ["'self'", "data:", "https://*.googleusercontent.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com"],
         frameSrc: ["'self'", "https://accounts.google.com"],
@@ -976,7 +963,7 @@ app.use((req, res, next) => {
 
 
 // In your server routes (e.g., authRoutes.ts)
-app.post('api/auth/refresh', async (req, res) => {
+app.post('/api/auth/refresh', async (req, res) => {
 
   try {
     const refreshToken = req.cookies?.refresh_token;
@@ -1369,11 +1356,7 @@ app.post('/api/resend-code', async (req, res) => {
 
     // Send email
     try {
-      await transporter.sendMail({
-        from: {
-          name: process.env.MAIL_FROM_NAME || 'Spatial Force',
-          address: process.env.MAIL_FROM || 'no-reply@spatialforce.co.zw'
-        },
+      await sendMail({
         to: normalizedEmail,
         subject: 'Your New Activation Code',
         html: `
@@ -1580,15 +1563,8 @@ app.post('/api/signup', async (req, res) => {
       ]
     );
     console.log('Attempting to send to:', normalizedEmail);
-    if (normalizedEmail === 'kudzanaichakavarika67@gmail.com') {
-      throw new Error('TEST: Would have sent to admin email instead of user');
-    }
     try {
-      await transporter.sendMail({
-        from: {
-          name: process.env.MAIL_FROM_NAME || 'Spatial Force',
-          address: process.env.MAIL_FROM || 'no-reply@spatialforce.co.zw'
-        },
+      await sendMail({
         to: normalizedEmail, 
         subject: 'Account Activation Required',
         html: `
@@ -1623,13 +1599,9 @@ app.post('/api/signup', async (req, res) => {
       });
       console.log('Activation email sent to:', normalizedEmail); // Add this for debugging
     } catch (error) {
-      console.error('Error sending activation email:', {
-        intendedRecipient: normalizedEmail,
-        error: error.message
-      });
-      throw error;
-    }
- 
+  console.error('Activation email failed (continuing):', error.message);
+  // do NOT throw – user can hit "resend code"
+}
 
     await client.query('COMMIT');
 
@@ -1723,11 +1695,7 @@ app.post('/api/forgot-password', async (req, res) => {
     if (rows.length === 0) {
       return res.status(500).json({ error: 'Failed to generate reset code' });
     }
-    await transporter.sendMail({
-      from:{
-         name: process.env.Mail_FROM_NAME || 'Spatial Force',
-         address: process.env.MAIL_FROM || 'no-reply@spatialcorce.co.zw'
-        },
+    await sendMail({
       to: email,
       subject: 'Password Reset Code',
       html: `
@@ -1896,12 +1864,8 @@ app.post('/api/resend-reset-code', async (req, res) => {
       [newCode, newExpiry, user.id]
     );
 
-    // Send email
-    await transporter.sendMail({
-      from: {
-        name: process.env.MAIL_FROM_NAME || 'Spatial Force',
-        address: process.env.MAIL_FROM || 'no-reply@spatialforce.co.zw'
-      },
+    const normalizedEmail = email.toString().toLowerCase().trim();
+    await sendMail({
       to: normalizedEmail,
       subject: 'New Password Reset Code',
       html: `
@@ -2378,12 +2342,8 @@ app.post('/api/bookings', validateBooking, async (req, res) => {
     );
 
     // Client Confirmation Email
-    await transporter.sendMail({
-      from: {
-        name: process.env.MAIL_FROM_NAME || 'Spatial Force',
-        address: process.env.MAIL_FROM || 'no-reply@spatialforce.co.zw'
-      },
-      to: process.env.ADMIN_EMAIL,
+    await sendMail({
+      to: email,
       subject: `Booking Confirmation: ${service}`,
       html: bookingEmailTemplate({ 
         name, 
@@ -2399,11 +2359,7 @@ app.post('/api/bookings', validateBooking, async (req, res) => {
 
     // Admin Notification
     if (process.env.ADMIN_EMAIL) {
-      await transporter.sendMail({
-        from: {
-          name: process.env.MAIL_FROM_NAME || 'Spatial Force',
-          address: process.env.MAIL_FROM || 'no-reply@spatialforce.co.zw'
-        },
+      await sendMail({
         to: process.env.ADMIN_EMAIL,
         subject: `NEW BOOKING: ${service} by ${name}`,
         html: `
@@ -2491,8 +2447,7 @@ app.post('/api/inquiries', validateInquiry, async (req, res) => {
     );
 
     // Client Confirmation
-    await transporter.sendMail({
-      from: `"Spatial Force " <${process.env.EMAIL_USER}>`,
+    await sendMail({
       to: email,
       subject: `Inquiry Received: ${inquiry_type}`,
       html: inquiryEmailTemplate(req.body)
@@ -2500,11 +2455,7 @@ app.post('/api/inquiries', validateInquiry, async (req, res) => {
 
     // Admin Notification
     if (process.env.ADMIN_EMAIL) {
-      await transporter.sendMail({
-        from: {
-          name: process.env.MAIL_FROM_NAME || 'Spatial Force',
-          address: process.env.MAIL_FROM || 'no-reply@spatialforce.co.zw'
-        },
+      await sendMail({
         to: process.env.ADMIN_EMAIL,
         subject: `NEW INQUIRY: ${inquiry_type} from ${name}`,
         html: `
@@ -2551,8 +2502,7 @@ app.use((req, res, next) => {
 
 app.get('/api/test-email', async (req, res) => {
   try {
-    await transporter.sendMail({
-      from: `Test <${process.env.EMAIL_USER}>`,
+    await sendMail({
       to: process.env.ADMIN_EMAIL,
       subject: 'Email Test',
       text: 'This is a test email from SpatialForce'
