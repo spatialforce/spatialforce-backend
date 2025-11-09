@@ -75,8 +75,33 @@ transporter.verify()
 
 const app = express();
 const PORT = process.env.PORT || 5001;
-// Replace this line:
-// app.use(helmet());
+const allowedOrigins = [
+  'https://www.spatialforce.co.zw',
+  'https://spatialforce.co.zw'
+  ];
+
+app.use(cors({
+  origin:function (origin,callback) {
+  if (!origin) return callback(null,true);
+
+   if (allowedOrigins.indexOf(origin) ===-1) {
+     const msg ='The CORS policy for this site does not allow access from the specified Origin.';
+    return callback(new Error(msg), false);
+     }
+     return callback(null, true);
+
+    },
+    credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'X-CSRF-Token'
+  ],
+  optionsSuccessStatus: 200,
+  maxAge: 86400
+}));
 
 app.use(
   helmet({
@@ -116,33 +141,7 @@ app.use((req, res, next) => {
     next();
   }
 });
-const allowedOrigins = [
-  'https://www.spatialforce.co.zw',
-  'https://spatialforce.co.zw'
-  ];
 
-app.use(cors({
-  origin:function (origin,callback) {
-  if (!origin) return callback(null,true);
-
-   if (allowedOrigins.indexOf(origin) ===-1) {
-     const msg ='The CORS policy for this site does not allow access from the specified Origin.';
-    return callback(new Error(msg), false);
-     }
-     return callback(null, true);
-
-    },
-    credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'X-Requested-With',
-    'X-CSRF-Token'
-  ],
-  optionsSuccessStatus: 200,
-  maxAge: 86400
-}));
 
 const PgSession = pgSession(session);
 
@@ -165,8 +164,6 @@ app.use(session({
     httpOnly: true,
     sameSite: 'none',
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    domain: process.env.COOKIE_DOMAIN 
-  
   },
   proxy: true
 
@@ -528,9 +525,8 @@ app.get('/api/auth/google/callback',
           res.cookie('auth_token', token, {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax',
+            sameSite: 'none',
             maxAge: 8 * 60 * 60 * 1000,
-            domain: process.env.COOKIE_DOMAIN || 'localhost',
             path: '/'
           });
 
@@ -559,14 +555,12 @@ app.post('/api/auth/logout', (req, res) => {
 
   // Clear cookies first
   res.clearCookie('auth_token', {
-    domain: process.env.COOKIE_DOMAIN || 'localhost',
     path: '/',
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production'
   });
 
   res.clearCookie('spatialforce.sid', {
-    domain: process.env.COOKIE_DOMAIN || 'localhost',
     path: '/',
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production'
@@ -732,9 +726,8 @@ app.post('/api/auth/login', async (req, res) => {
       res.cookie('auth_token', accessToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        sameSite: 'none',
         maxAge: 604800000, // 7 days
-        domain: process.env.COOKIE_DOMAIN || 'localhost',
         path: '/'
       });
 
@@ -802,10 +795,7 @@ const sessionRateLimiter = rateLimit({
       code: 'RATE_LIMIT_EXCEEDED'
     });
   },
-  skip: (req) => {
-    // Skip rate limiting for authenticated users
-    return req.isAuthenticated && req.isAuthenticated();
-  }
+skip: (req) => req.method === 'OPTIONS' || (req.isAuthenticated && req.isAuthenticated())
 });
 // Apply to login routes
 const authLimiter = rateLimit({
@@ -968,7 +958,7 @@ app.post('/api/auth/refresh', async (req, res) => {
     res.cookie('auth_token', newAccessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      sameSite: 'none',
       maxAge: 15 * 60 * 1000, // 15 minutes
       path: '/'
     });
@@ -976,7 +966,7 @@ app.post('/api/auth/refresh', async (req, res) => {
     res.cookie('refresh_token', newRefreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      sameSite: 'none',
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
       path: '/'
     });
@@ -2342,20 +2332,26 @@ app.post('/api/bookings', validateBooking, async (req, res) => {
 // Inquiry Routes
 // ====================
 
-// Validate Inquiry Middleware
+// ====================
+// Inquiry API (copy–paste ready)
+// ====================
+
+// 1) Validation middleware (simple and strict)
 const validateInquiry = (req, res, next) => {
-  const requiredFields = ['name', 'email', 'message', 'inquiry_type'];
+  const required = ['name', 'email', 'message', 'inquiry_type'];
   const errors = [];
   const received = {};
 
-  requiredFields.forEach(field => {
+  required.forEach((field) => {
     received[field] = req.body[field] || '';
-    if (!req.body[field]?.trim()) {
+    if (!req.body[field] || !String(req.body[field]).trim()) {
       errors.push(`${field} is required`);
     }
   });
 
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(req.body.email?.trim())) {
+  const email = String(req.body.email || '').trim();
+  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  if (!emailOk) {
     errors.push('Invalid email format');
   }
 
@@ -2370,64 +2366,99 @@ const validateInquiry = (req, res, next) => {
   next();
 };
 
+// 2) Email template for the client confirmation
+const inquiryEmailTemplate = (data) => `
+  <div style="font-family: Arial, sans-serif; padding: 25px; max-width: 600px; margin: auto; border: 1px solid #e0e0e0; border-radius: 10px;">
+    <div style="text-align: center; margin-bottom: 25px;">
+      <h1 style="color: #2b6cb0; margin: 0;">Inquiry Received!</h1>
+      <p style="color: #4a5568; margin-top: 10px;">
+        Thank you for contacting us, ${data.name}! We'll respond shortly.
+      </p>
+    </div>
+
+    <div style="background: #f8fafc; padding: 20px; border-radius: 8px; margin-bottom: 25px;">
+      <h3 style="color: #2d3748; margin-top: 0; margin-bottom: 15px;">Your Inquiry Details</h3>
+      
+      <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 10px; margin-bottom: 15px;">
+        <span style="color: #718096;">Inquiry Type:</span>
+        <span style="color: #2d3748;">${data.inquiry_type}</span>
+        <span style="color: #718096;">Name:</span>
+        <span style="color: #2d3748;">${data.name}</span>
+        <span style="color: #718096;">Email:</span>
+        <span style="color: #2d3748;">${data.email}</span>
+        ${data.organization ? `
+        <span style="color: #718096;">Organization:</span>
+        <span style="color: #2d3748;">${data.organization}</span>` : ''}
+      </div>
+    </div>
+
+    <div style="background: #ffffff; padding: 20px; border-radius: 8px; margin-bottom: 25px;">
+      <h3 style="color: #2d3748; margin-top: 0; margin-bottom: 15px;">Your Message</h3>
+      <div style="background: #f8fafc; padding: 15px; border-radius: 6px;">
+        <div style="white-space: pre-wrap; line-height: 1.6;">
+          ${data.message}
+        </div>
+      </div>
+    </div>
+  </div>
+`;
+
+// 3) POST /api/inquiries (DB insert + single JSON response + fire-and-forget emails)
 app.post('/api/inquiries', validateInquiry, async (req, res) => {
   try {
-    const { name, email, organization, message, inquiry_type } = req.body;
+    const name = String(req.body.name).trim();
+    const email = String(req.body.email).trim().toLowerCase();
+    const organization = req.body.organization ? String(req.body.organization).trim() : null;
+    const message = String(req.body.message).trim();
+    const inquiry_type = String(req.body.inquiry_type).trim();
 
-    const { rows } = await pool.query(
-      `INSERT INTO inquiries (
-        name, email, organization, message, inquiry_type
-      ) VALUES ($1, $2, $3, $4, $5)
-      RETURNING id, created_at`,
-      [
-        name.trim(),
-        email.trim(),
-        organization?.trim() || null,
-        message.trim(),
-        inquiry_type.trim()
-      ]
+    const result = await pool.query(
+      `INSERT INTO inquiries (name, email, organization, message, inquiry_type)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, created_at`,
+      [name, email, organization, message, inquiry_type]
     );
 
-    // Client Confirmation
-   res.status(201).json({
-       success: true,
-       message: 'Booking created successfully',
-       bookingId: rows[0].id,
-       teamsLink
-     });
-+
-+    // Fire-and-forget emails
-+    setImmediate(() => {
-+      sendMail({
-+        to: email,
-+        subject: `Booking Confirmation: ${service}`,
-+        html: bookingEmailTemplate({ name, email, service, date, time, consultationMethod, whatsappContact, teamsLink })
-+      }).catch(err => console.error('Booking mail (client) failed:', err));
-+
-+      if (process.env.ADMIN_EMAIL) {
-+        sendMail({
-+          to: process.env.ADMIN_EMAIL,
-+          subject: `NEW BOOKING: ${service} by ${name}`,
-+          html: `
-+            <div style="font-family: Arial, sans-serif; padding: 20px;">
-+              <h2 style="color: #2b6cb0;">New Booking Alert</h2>
-+              <ul>
-+                <li><strong>Client:</strong> ${name}</li>
-+                <li><strong>Service:</strong> ${service}</li>
-+                <li><strong>Date:</strong> ${new Date(date).toLocaleDateString()}</li>
-+                <li><strong>Time:</strong> ${time}</li>
-+                <li><strong>Method:</strong> ${consultationMethod}</li>
-+                ${teamsLink ? `<li><strong>Teams:</strong> <a href="${teamsLink}">Join</a></li>` : ''}
-+                ${whatsappContact ? `<li><strong>WhatsApp:</strong> ${whatsappContact}</li>` : ''}
-+              </ul>
-+            </div>`
-+        }).catch(err => console.error('Booking mail (admin) failed:', err));
-+      }
-+    });
+    const inquiryId = result.rows[0].id;
+
+    // Respond once (success)
     res.status(201).json({
       success: true,
       message: 'Inquiry submitted successfully',
-      inquiryId: rows[0].id
+      inquiryId
+    });
+
+    // Fire-and-forget emails (don’t block the response)
+    setImmediate(() => {
+      // Client confirmation
+      sendMail({
+        to: email,
+        subject: 'We received your inquiry',
+        html: inquiryEmailTemplate({ name, email, organization, message, inquiry_type })
+      }).catch((err) => console.error('Inquiry mail (client) failed:', err));
+
+      // Admin notification
+      if (process.env.ADMIN_EMAIL) {
+        const adminHtml = `
+          <div style="font-family: Arial, sans-serif; padding: 16px;">
+            <h2>New Inquiry</h2>
+            <ul>
+              <li><strong>Type:</strong> ${inquiry_type}</li>
+              <li><strong>Name:</strong> ${name}</li>
+              <li><strong>Email:</strong> ${email}</li>
+              ${organization ? `<li><strong>Organization:</strong> ${organization}</li>` : ''}
+              <li><strong>ID:</strong> ${inquiryId}</li>
+            </ul>
+            <h3>Message</h3>
+            <pre style="white-space: pre-wrap; line-height: 1.5; background:#f8fafc; padding:12px; border-radius:6px;">${message}</pre>
+          </div>
+        `;
+        sendMail({
+          to: process.env.ADMIN_EMAIL,
+          subject: `New Inquiry: ${inquiry_type} by ${name}`,
+          html: adminHtml
+        }).catch((err) => console.error('Inquiry mail (admin) failed:', err));
+      }
     });
   } catch (error) {
     console.error('Inquiry error:', error);
