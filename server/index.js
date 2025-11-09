@@ -40,18 +40,29 @@ const pool = new Pool({
   }
 });
 
-
 const transporter = nodemailer.createTransport({
-  host: 'smtp.sendgrid.net',
-  port: 587, // Keep using 587
-  secure: false, // MUST BE FALSE FOR PORT 587
+  host: process.env.SMTP_HOST,
+  port: process.env.SMTP_PORT,
+  secure: process.env.SMTP_SECURE === 'true',
   auth: {
-    user: 'apikey',
-    pass:process.env.SENDGRID_API_KEY
- },
-  sender: 'no-reply@spatialforce.co.zw'
-
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
 });
+
+export async function sendMail(to, subject, html) {
+  return transporter.sendMail({
+    from: {
+      name: process.env.MAIL_FROM_NAME,
+      address: process.env.MAIL_FROM
+    },
+    to,
+    replyTo: process.env.MAIL_REPLY_TO,  // 👈 replies go here
+    subject,
+    html
+  });
+}
+
 // Verify connection
 transporter.verify()
   .then(() => console.log('NEW TRANSPORTER READY'))
