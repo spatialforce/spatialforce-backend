@@ -104,11 +104,11 @@ app.use(
     hidePoweredBy: true
   })
 );
-
+app.set('trust proxy', 1);
+app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(cookieParser());
-app.use(compression());
+app.use(compression({ threshold: 1024 }));
 app.use((req, res, next) => {
   if (req.url === '/favicon.ico') {
     res.status(204).end();
@@ -140,19 +140,19 @@ app.use(cors({
     'X-Requested-With',
     'X-CSRF-Token'
   ],
-  optionsSuccessStatus: 200
+  optionsSuccessStatus: 200,
+  maxAge: 86400
 }));
 
 const PgSession = pgSession(session);
-// In your session middleware
-app.set('trust proxy', 1); // Required for secure cookies in production
+
 
 app.use(session({
   name: 'spatialforce.sid',
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  rolling: true,
+  rolling: false,
   store: new PgSession({
     pool: pool,
     tableName: 'user_sessions',
@@ -233,28 +233,6 @@ const authenticateJWT = (req, res, next) => {
     });
   }
 };
-app.use((req, res, next) => {
-  if (req.session.user && req.path !== '/auth/refresh') {
-    // Generate new JWT with fresh expiration
-    const newToken = jwt.sign(
-      {
-        userId: req.session.user.id,
-        email: req.session.user.email
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '15m' }
-    );
-
-    // Reset JWT cookie expiration
-    res.cookie('auth_token', newToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
-    });
-  }
-  next();
-});
 
 // --------------------------
 // Passport Configuration
@@ -299,12 +277,7 @@ passport.deserializeUser(async (serialized, done) => {
 // Update the Google Strategy's success handler:
 
 // Update the serializeUser function:
-passport.serializeUser((user, done) => {
-  done(null, {
-    id: user.id,
-    provider: user.auth_provider // Ensure this matches deserialize
-  });
-});
+
 // Add isAuthenticated helper method if it's missing
 app.use((req, res, next) => {
   req.isAuthenticated = function() {
@@ -432,16 +405,6 @@ passport.use(new GoogleStrategy({
         provider: user.auth_provider 
       });
     }
-
-    // Fixed syntax issue here - changed existingUser.rows[0].auth_provider to user.auth_provider
-    if (user.auth_provider !== 'google') {
-      return done(null, false, { 
-        message: 'existing_account_diff_provider',
-        provider: user.auth_provider,
-        email: normalizedEmail
-      });
-    }
-
     // 5. Update existing Google user
     await pool.query(
       `UPDATE users SET
@@ -596,7 +559,7 @@ app.post('/api/auth/logout', (req, res) => {
 
   // Clear cookies first
   res.clearCookie('auth_token', {
-    domain: '.spatialforce.co.zw'|| 'localhost',
+    domain: process.env.COOKIE_DOMAIN || 'localhost',
     path: '/',
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production'
@@ -638,21 +601,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Add session regeneration middleware after successful login
-app.use((req, res, next) => {
-  const originalSend = res.send;
-  
-  res.send = function (body) {
-    if (req.session && req.path === '/api/auth/login' && res.statusCode === 200) {
-      req.session.regenerate((err) => {
-        if (err) console.error('Session regeneration error:', err);
-      });
-    }
-    originalSend.call(this, body);
-  };
-  
-  next();
-});
+
 // Add this to store the error message in session
 app.use((req, res, next) => {
   if (req.path === '/api/auth/google/callback' && req.query.error) {
@@ -717,7 +666,7 @@ app.post('/api/auth/login', async (req, res) => {
         provider: user.auth_provider
       });
     }
-9
+
     if (user.login_attempts >= 5 && Date.now() - user.last_login < 900000) {
       return res.status(429).json({
         success: false,
@@ -905,8 +854,7 @@ app.get('/api/auth/session',
       }
 
       if (isAuthenticated) {
-        // Refresh session expiration
-        req.session.touch();
+    
         
         return res.json({
           authenticated: true,
@@ -1049,13 +997,7 @@ app.post('/api/auth/refresh', async (req, res) => {
   }
 });
 
-// Add this middleware right after session setup
-app.use((req, res, next) => {
-  req.session.save((err) => {
-    if (err) console.error('Session save error:', err);
-    next();
-  });
-});
+
 
 
 app.post('/api/validate-token', (req, res) => {
@@ -2447,32 +2389,41 @@ app.post('/api/inquiries', validateInquiry, async (req, res) => {
     );
 
     // Client Confirmation
-    await sendMail({
-      to: email,
-      subject: `Inquiry Received: ${inquiry_type}`,
-      html: inquiryEmailTemplate(req.body)
-    });
-
-    // Admin Notification
-    if (process.env.ADMIN_EMAIL) {
-      await sendMail({
-        to: process.env.ADMIN_EMAIL,
-        subject: `NEW INQUIRY: ${inquiry_type} from ${name}`,
-        html: `
-          <div style="font-family: Arial, sans-serif; padding: 20px;">
-            <h2 style="color: #2b6cb0;">New Inquiry Alert</h2>
-            <p>Details:</p>
-            <ul>
-              <li><strong>From:</strong> ${name} (${email})</li>
-              <li><strong>Type:</strong> ${inquiry_type}</li>
-              ${organization ? `<li><strong>Organization:</strong> ${organization}</li>` : ''}
-              <li><strong>Message:</strong> ${message}</li>
-            </ul>
-          </div>
-        `
-      });
-    }
-
+   res.status(201).json({
+       success: true,
+       message: 'Booking created successfully',
+       bookingId: rows[0].id,
+       teamsLink
+     });
++
++    // Fire-and-forget emails
++    setImmediate(() => {
++      sendMail({
++        to: email,
++        subject: `Booking Confirmation: ${service}`,
++        html: bookingEmailTemplate({ name, email, service, date, time, consultationMethod, whatsappContact, teamsLink })
++      }).catch(err => console.error('Booking mail (client) failed:', err));
++
++      if (process.env.ADMIN_EMAIL) {
++        sendMail({
++          to: process.env.ADMIN_EMAIL,
++          subject: `NEW BOOKING: ${service} by ${name}`,
++          html: `
++            <div style="font-family: Arial, sans-serif; padding: 20px;">
++              <h2 style="color: #2b6cb0;">New Booking Alert</h2>
++              <ul>
++                <li><strong>Client:</strong> ${name}</li>
++                <li><strong>Service:</strong> ${service}</li>
++                <li><strong>Date:</strong> ${new Date(date).toLocaleDateString()}</li>
++                <li><strong>Time:</strong> ${time}</li>
++                <li><strong>Method:</strong> ${consultationMethod}</li>
++                ${teamsLink ? `<li><strong>Teams:</strong> <a href="${teamsLink}">Join</a></li>` : ''}
++                ${whatsappContact ? `<li><strong>WhatsApp:</strong> ${whatsappContact}</li>` : ''}
++              </ul>
++            </div>`
++        }).catch(err => console.error('Booking mail (admin) failed:', err));
++      }
++    });
     res.status(201).json({
       success: true,
       message: 'Inquiry submitted successfully',
@@ -2533,13 +2484,7 @@ app.get('/api/health', async (req, res) => {
   try {
     await pool.query('SELECT NOW()');
     healthCheck.services.database = 'healthy';
-    
-    if (process.env.EMAIL_USER) {
-      await transporter.verify();
-      healthCheck.services.email = 'authenticated';
-    } else {
-      healthCheck.services.email = 'disabled';
-    }
+    healthCheck.services.email = process.env.EMAIL_USER ? 'configured' : 'disabled';
     
     res.json(healthCheck);
   } catch (error) {
@@ -2550,63 +2495,15 @@ app.get('/api/health', async (req, res) => {
 });
 
 
-
-
-
-// Trust first proxy if behind load balancer
-app.set('trust proxy', 1);
-
-// Cookie parser middleware
-app.use(cookieParser());
-
-// Secure cookie settings middleware
-app.use((req, res, next) => {
-  res.cookie('test-cookie', 'value', {
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    httpOnly: true
-  });
-  next();
-});
-app.use((req, res, next) => {
-  req.session.save((err) => {
-    if (err) console.error('Session save error:', err);
-    next();
-  });
-});
-app.use((req, res, next) => {
-  const start = Date.now();
-  res.on('finish', () => {
-    console.log({
-      method: req.method,
-      path: req.path,
-      status: res.statusCode,
-      duration: `${Date.now() - start}ms`,
-      user: req.user?.id || 'guest'
+if (process.env.NODE_ENV !== 'production') {
+  app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+     console.log(`${req.method} ${req.path} ${res.statusCode} ${Date.now() - start}ms`);
     });
-  });
-  next();
-});
-
-app.use((err, req, res, next) => {
-  console.error('Server Error:', {
-    message: err.message,
-    stack: err.stack,
-    query: req.query,
-    body: req.body
-  });
-  res.status(500).json({ error: 'Internal server error' });
-});
-
-app.use((err, req, res, next) => {
-  console.error('Server Error:', err);
-  res.status(500).json({
-    success: false,
-    error: process.env.NODE_ENV === 'production' 
-      ? 'Internal server error' 
-      : err.message
-  });
-});
+    next();
+  })
+}
 
 app.use((err, req, res, next) => {
   if (req.path.startsWith('/api')) {
