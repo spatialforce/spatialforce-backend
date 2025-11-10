@@ -2209,42 +2209,6 @@ const bookingEmailTemplate = (data) => `
   </div>
 `;
 
-const inquiryEmailTemplate = (data) => `
-  <div style="font-family: Arial, sans-serif; padding: 25px; max-width: 600px; margin: auto; border: 1px solid #e0e0e0; border-radius: 10px;">
-    <div style="text-align: center; margin-bottom: 25px;">
-      <h1 style="color: #2b6cb0; margin: 0;">Inquiry Received!</h1>
-      <p style="color: #4a5568; margin-top: 10px;">
-        Thank you for contacting us, ${data.name}! We'll respond shortly.
-      </p>
-    </div>
-
-    <div style="background: #f8fafc; padding: 20px; border-radius: 8px; margin-bottom: 25px;">
-      <h3 style="color: #2d3748; margin-top: 0; margin-bottom: 15px;">Your Inquiry Details</h3>
-      
-      <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 10px; margin-bottom: 15px;">
-        <span style="color: #718096;">Inquiry Type:</span>
-        <span style="color: #2d3748;">${data.inquiry_type}</span>
-        <span style="color: #718096;">Name:</span>
-        <span style="color: #2d3748;">${data.name}</span>
-        <span style="color: #718096;">Email:</span>
-        <span style="color: #2d3748;">${data.email}</span>
-        ${data.organization ? `
-        <span style="color: #718096;">Organization:</span>
-        <span style="color: #2d3748;">${data.organization}</span>
-        ` : ''}
-      </div>
-    </div>
-
-    <div style="background: #ffffff; padding: 20px; border-radius: 8px; margin-bottom: 25px;">
-      <h3 style="color: #2d3748; margin-top: 0; margin-bottom: 15px;">Your Message</h3>
-      <div style="background: #f8fafc; padding: 15px; border-radius: 6px;">
-        <div style="white-space: pre-wrap; line-height: 1.6;">
-          ${data.message}
-        </div>
-      </div>
-    </div>
-  </div>
-`;
 
 
 app.post('/api/bookings', validateBooking, async (req, res) => {
