@@ -16,6 +16,8 @@ import pgSession from 'connect-pg-simple';
 import crypto from 'crypto';
 import compression from 'compression'; 
 import bcrypt from 'bcryptjs';
+import fetch from 'node-fetch';
+
 
 
 
@@ -108,12 +110,28 @@ app.use(
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'", "https://accounts.google.com"],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         connectSrc: ["'self'", "https://spatialforce.co.zw", "https://www.spatialforce.co.zw", "https://spatialforce-backend.vercel.app"],
-        imgSrc: ["'self'", "data:", "https://*.googleusercontent.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com"],
-        frameSrc: ["'self'", "https://accounts.google.com"],
+        scriptSrc: [
+          "'self'",
+          "'unsafe-inline'",
+          "https://accounts.google.com",
+          "https://www.google.com",
+          "https://www.gstatic.com"
+        ],
+        imgSrc: [
+          "'self'",
+          "data:",
+          "https://*.googleusercontent.com",
+          "https://www.google.com"
+        ],
+        frameSrc: [
+          "'self'",
+          "https://accounts.google.com",
+          "https://www.google.com"
+        ],
+        
         objectSrc: ["'none'"]
       }
     },
@@ -544,47 +562,73 @@ app.get('/api/auth/google/callback',
     })(req, res, next);
   }
 );
-app.post('/api/auth/logout', (req, res) => {
+app.post('/api/auth/logout', async (req, res) => {
   if (!req.session) {
     console.error('Session middleware not initialized');
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'Session system not available',
       code: 'SESSION_ERROR'
     });
   }
 
-  // Clear cookies first
-  res.clearCookie('auth_token', {
-    path: '/',
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production'
-  });
+  try {
+    const refreshToken = req.cookies?.refresh_token;
 
-  res.clearCookie('spatialforce.sid', {
-    path: '/',
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production'
-  });
-
-  // Handle session destruction safely
-  req.session.destroy((err) => {
-    if (err) {
-      console.error('Session destruction error:', err);
-      return res.status(500).json({ 
-        error: 'Could not destroy session',
-        code: 'SESSION_DESTROY_FAILED'
-      });
+    if (refreshToken) {
+      // Remove this refresh token from DB
+      await pool.query(
+        'DELETE FROM refresh_tokens WHERE token = $1',
+        [refreshToken]
+      );
     }
-    
-    // Clear user context
-    req.user = null;
-    
-    res.json({ 
-      success: true,
-      message: 'Logged out successfully'
+
+    // Clear cookies
+    res.clearCookie('auth_token', {
+      path: '/',
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'none'
     });
-  });
+
+    res.clearCookie('refresh_token', {
+      path: '/',
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'none'
+    });
+
+    res.clearCookie('spatialforce.sid', {
+      path: '/',
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'none'
+    });
+
+    req.session.destroy(err => {
+      if (err) {
+        console.error('Session destruction error:', err);
+        return res.status(500).json({
+          error: 'Could not destroy session',
+          code: 'SESSION_DESTROY_FAILED'
+        });
+      }
+
+      req.user = null;
+
+      return res.json({
+        success: true,
+        message: 'Logged out successfully'
+      });
+    });
+  } catch (err) {
+    console.error('Logout error:', err);
+    return res.status(500).json({
+      error: 'Logout failed',
+      code: 'LOGOUT_ERROR'
+    });
+  }
 });
+
 
 
 // Add this session verification middleware BEFORE your routes
@@ -1380,7 +1424,7 @@ app.post('/api/signup', async (req, res) => {
 
   try {
     // Destructure and normalize input
-    const { firstName, lastName, email, password, confirmPassword } = req.body;
+    const { firstName, lastName, email, password, confirmPassword,recaptchaToken } = req.body;
     const normalizedEmail = email ? email.toLowerCase().trim() : '';
 
     // Update masked values
@@ -1393,7 +1437,50 @@ app.post('/api/signup', async (req, res) => {
       userAgent: req.get('User-Agent'),
       ...maskedBody
     });
+    try {
+      if (!recaptchaToken) {
+        return res.status(400).json({
+          success: false,
+          error: 'reCAPTCHA validation failed',
+          code: 'RECAPTCHA_MISSING'
+        });
+      }
 
+      const verifyUrl = `https://www.google.com/recaptcha/api/siteverify`;
+      const params = new URLSearchParams();
+      params.append('secret', process.env.RECAPTCHA_SECRET_KEY);
+      params.append('response', recaptchaToken);
+
+      const recaptchaRes = await fetch(verifyUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString()
+      });
+
+      const recaptchaData = await recaptchaRes.json();
+
+      if (!recaptchaData.success) {
+        console.warn(`[Signup ${requestId}] reCAPTCHA failed`, {
+          ...maskedBody,
+          recaptchaErrors: recaptchaData['error-codes']
+        });
+        return res.status(400).json({
+          success: false,
+          error: 'reCAPTCHA verification failed',
+          code: 'RECAPTCHA_FAILED'
+        });
+      }
+    } catch (recaptchaError) {
+      console.error(`[Signup ${requestId}] reCAPTCHA error`, {
+        error: recaptchaError.message,
+        ...maskedBody
+      });
+      return res.status(500).json({
+        success: false,
+        error: 'reCAPTCHA service error',
+        code: 'RECAPTCHA_SERVICE_ERROR'
+      });
+    }
     // Validation phase
     const validationErrors = [];
     
@@ -1640,7 +1727,7 @@ app.post('/api/forgot-password', async (req, res) => {
           ${resetCode}
         </div>
         <p>This code will expire in 15 minutes. Please enter it in the password reset form to proceed with resetting your password.</p>
-        <p>If you have any issues or did not request a password reset, please contact our support team at <a href="mailto:support@example.com">support@example.com</a>.</p>
+        <p>If you have any issues or did not request a password reset, please contact us at <a href="gis@spatialforce.co.zw">gis@spatialforce</a>.</p>
         <p>Thank you for your attention.</p>
         <p>Best regards,<br>The Support Team</p>
       </div>
